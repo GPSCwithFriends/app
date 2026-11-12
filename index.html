@@ -2,16 +2,16 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GPSC with Friends</title>
 <meta name="theme-color" content="#101B33">
-<link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="GPSC Friends">
+<script src="capacitor.js"></script>
 <script src="config.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="preconnect" href="https://script.google.com"><link rel="preconnect" href="https://script.googleusercontent.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=Noto+Serif+Gujarati:wght@500;700&display=swap" rel="stylesheet">
@@ -389,6 +389,9 @@ function findLinks(subId) {
 }
 
 /* ======================= login ======================= */
+function credit(dark) {
+  return '<p style="text-align:center;font-size:11.5px;line-height:1.5;margin:18px 8px 4px;color:' + (dark ? '#AEB5C6' : 'var(--mute)') + '">Designed &amp; developed by <b style="color:' + (dark ? 'var(--gold2)' : 'var(--saff)') + '">Shlok\u2019s Papa</b><br><i>Approved by Shlok: \u201cda-da-da-da!\u201d</i> \u2705</p>';
+}
 function loginView() {
   const logo = IMG('logo_full.jpg');
   const arch = (f, l) => '<div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1"><div style="width:100%;max-width:96px;height:104px;border-radius:60px 60px 14px 14px;overflow:hidden;border:3px solid var(--gold);background:#1C2A4A"><img src="' + IMG(f) + '" alt="' + l + '" style="width:100%;height:100%;object-fit:cover"></div><span style="font:600 11px Inter,sans-serif;color:#D8DDEA;text-align:center">' + l + '</span></div>';
@@ -399,7 +402,7 @@ function loginView() {
     (logo ? '<div style="display:flex;justify-content:center;gap:12px;margin-bottom:18px">' + arch('vidhansabha.jpg', 'Section Officer') + arch('collector_office.jpg', 'Deputy Collector') + arch('police_jeep.jpg', 'Dy.SP') + '</div>' : '') +
     '<div class="card" style="color:var(--ink);background:var(--bg);box-shadow:0 0 0 1px var(--gold),0 18px 40px rgba(0,0,0,.35);border-radius:24px"><label for="lu" style="margin-top:0">Username</label><input type="text" id="lu" autocapitalize="none" autocomplete="username">' +
     '<label for="lp">Password</label><input type="password" id="lp" autocomplete="current-password"><button class="cta" id="lb">Enter</button>' +
-    '<p class="mute small" style="text-align:center;margin:6px 0 0">Stays logged in for 30 days</p></div></div>';
+    '<p class="mute small" style="text-align:center;margin:6px 0 0">Stays logged in for 30 days</p></div>' + credit(true) + '</div>';
   const go = () => busy($('lb'), async () => {
     const r = await call('login', $('lu').value, $('lp').value);
     if (!r.ok) throw new Error(r.msg);
@@ -524,7 +527,7 @@ function homeView() {
   h += '<div class="card"><div class="row" style="margin-bottom:10px"><span class="h2" style="margin:0;font-size:16px">Friends today</span><span class="mute small"><span style="color:var(--sage)">●</span> done <span style="color:var(--amber)">●</span> pending</span></div><div style="display:flex;justify-content:space-around;flex-wrap:wrap;gap:8px">' +
     fb.map(x => { const ok = x.todayLeave || x.todayGot >= x.todayNeed; return '<div class="fr"><span class="ringav" style="box-shadow:0 0 0 2px ' + (x.todayLeave ? '#9AA3B8' : ok ? 'var(--sage)' : 'var(--amber)') + '">' + avatar(x.username, 38) + '</span>' + esc(first(x.username)) + (x.todayLeave ? ' (leave)' : '') + '</div>'; }).join('') + '</div></div>';
   h += friendsBehind();
-  return h;
+  return h + credit(false);
 }
 function todo(done, title, sub, act, id, icon) {
   return '<div class="todo" data-act="' + act + '"' + (id ? ' data-id="' + id + '"' : '') + ' style="border-bottom:1px dashed var(--line)"><span class="ti" style="' + (done ? 'background:#E3F1E8' : '') + '">' + ico(done ? 'check' : (icon || 'check'), done ? 'var(--sage)' : 'var(--terra)', 18) + '</span><div style="flex:1"><div style="font-weight:600' + (done ? ';text-decoration:line-through;opacity:.6' : '') + '">' + esc(title) + '</div>' + (sub ? '<div class="mute small">' + esc(sub) + '</div>' : '') + '</div><span class="mute" aria-hidden="true">›</span></div>';
