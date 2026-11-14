@@ -2,16 +2,16 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GPSC with Friends</title>
 <meta name="theme-color" content="#101B33">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="GPSC Friends">
-<script src="capacitor.js"></script>
 <script src="config.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="preconnect" href="https://script.google.com"><link rel="preconnect" href="https://script.googleusercontent.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800&family=Noto+Serif+Gujarati:wght@500;700&display=swap" rel="stylesheet">
@@ -515,6 +515,7 @@ function homeView() {
   const allDone = (ansDone || me.todayLeave) && !ti.due.length && !ti.checks && !ti.votes.length;
   if (allDone) h += '<div class="banner ok" style="cursor:default;margin-bottom:0"><span>Today complete ✓</span></div>';
   h += '</div>';
+  h += grpCards();
   h += '<button class="cta" data-act="write">' + ico('nib', '#FFF7EA', 22) + (ansDone ? 'Write another answer' : 'Write today\'s answer') + '</button>';
   h += '<div class="grid2" style="margin-top:12px"><button class="ghost" data-act="coverage"><span class="gi">' + ico('notebook', 'var(--terra)') + '</span>Notes &amp; coverage</button><button class="ghost" data-act="reading"><span class="gi">' + ico('books', 'var(--terra)') + '</span>Reading log</button>' +
     '<button class="ghost" data-act="ca"><span class="gi">' + ico('news', 'var(--terra)') + '</span>Current affairs</button><button class="ghost" data-act="beyond"><span class="gi">' + ico('window', 'var(--terra)') + '</span>Beyond the syllabus</button>' +
@@ -563,13 +564,14 @@ function builder() {
   let h = (S.d.upsc ? '<div class="seg" style="margin-bottom:8px"><button data-act="wMode" data-v="gpsc" class="' + (!U ? 'on' : '') + '">GPSC pattern</button><button data-act="wMode" data-v="upsc" class="' + (U ? 'on' : '') + '">UPSC pattern</button></div>' + (U ? '<p class="mute small" style="margin:0 0 6px">Shared GS topics count for the group too. Optional and extra-GS topics stay private and go to ' + esc(first(st.upscChecker || '')) + '.</p>' : '') : '') +
     '<div class="seg"><button data-act="wKind" data-v="answer" class="' + (w.kind === 'answer' ? 'on' : '') + '">Answers</button><button data-act="wKind" data-v="essay" class="' + (w.kind === 'essay' ? 'on' : '') + '">Essay</button><button data-act="wKind" data-v="fullpaper" class="' + (w.kind === 'fullpaper' ? 'on' : '') + '">Full paper</button></div>';
   if (w.kind === 'answer') {
+    if (!U) h += randomBox(w);
     h += '<label for="wCnt">How many answers?</label><select id="wCnt">' + Array.from({ length: 15 }, (_, k) => k + 1).map(n => '<option value="' + n + '"' + (w.count === n ? ' selected' : '') + '>' + n + ' answer' + (n > 1 ? 's' : '') + (n > 1 ? ' · about ' + Math.round(n * 9.5) + ' min' : '') + '</option>').join('') + '</select>' + (w.count > 1 ? '<p class="mute small" style="margin:6px 0 0">Scan all answers into one PDF, in order.</p>' : '');
     w.slots.forEach((s, i) => {
       const paper = slotPaper(s) || s.pp || '', opts = U ? Object.keys(uMarksTable(s.subtopicId, paper)).map(Number) : marksFor(paper);
       if (opts.indexOf(Number(s.marks)) < 0) s.marks = opts[0];
       const bank = s.subtopicId ? bankFor(s.subtopicId) : [];
       const attempted = new Set(S.d.answers.map(a => String(a.questionId)));
-      h += '<div class="slot"><div class="row"><b>Question ' + (i + 1) + '</b><span class="mute small">' + (U && isUpscId(s.subtopicId) ? '<span class="tag">UPSC only</span>' : '') + (s.subtopicId && asked().has(String(s.subtopicId)) ? '<span class="tag warn">Asked 2025</span>' : '') + '</span></div>' +
+      h += '<div class="slot"><div class="row"><b>Question ' + (i + 1) + '</b><span class="mute small">' + (s.rnd ? '<button class="chip" data-act="wSwap" data-i="' + i + '"' + (s.swaps ? ' disabled style="opacity:.5"' : '') + '>' + (s.swaps ? 'Swap used' : '↻ Swap') + '</button> ' : '') + (U && isUpscId(s.subtopicId) ? '<span class="tag">UPSC only</span>' : '') + (s.subtopicId && asked().has(String(s.subtopicId)) ? '<span class="tag warn">Asked 2025</span>' : '') + '</span></div>' +
         picker('ws' + i, s.subtopicId, s.pk, s.pp, true) +
         '<div class="seg" style="margin-top:8px">' + opts.map(m => '<button data-act="wMarks" data-i="' + i + '" data-v="' + m + '" class="' + (Number(s.marks) === m ? 'on' : '') + '">' + m + ' marks<br><small>' + wordsFor('answer', m, w.mode, s.subtopicId) + ' words · ' + Math.round(targetSecs('answer', m, w.mode, s.subtopicId) / 60) + ' min</small></button>').join('') + '</div>';
       if (s.subtopicId) {
@@ -587,9 +589,13 @@ function builder() {
     if (U) h += '<label for="wfp">UPSC paper</label><select id="wfp">' + UPAPERS.map(p => '<option' + (w.paper === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select>';
     h += '<p class="mute">Write a whole paper in ' + st.fullPaperMinutes + ' minutes, like the exam. Open the paper (e.g. the GPSC 2025 paper or a UPSC paper), then start the timer.</p><label for="wq0">Which paper?</label><input type="text" id="wq0" data-slot="0" placeholder="e.g. GPSC 2025 GS-2" value="' + esc(w.slots[0].question) + '">';
   }
-  h += '<button class="btn dark" data-act="wStart">Start writing mode</button><button class="btn sec" data-act="wNoTimer">I already wrote it · upload without timer</button>';
+  const grp = w.kind === 'answer' && !U && (w.with || []).length;
+  if (w.kind === 'answer' && !U) h += withBox(w);
+  h += '<button class="btn dark" data-act="wStart">' + (grp ? 'Start group session · start writing' : 'Start writing mode') + '</button><button class="btn sec" data-act="wNoTimer">' + (grp ? 'Start group session · upload without timer' : 'I already wrote it · upload without timer') + '</button>';
   S.nextPool = S.pool; openModal('Write answers', h); S.modalCtx = { type: 'builder' };
   const fp = $('wfp'); if (fp) fp.addEventListener('change', () => { w.paper = fp.value; });
+  const rp = $('rP'); if (rp) rp.addEventListener('change', () => { keepSlots(); w.rand = { paper: rp.value, topic: '' }; builder(); });
+  const rt = $('rT'); if (rt) rt.addEventListener('change', () => { w.rand = Object.assign(w.rand || {}, { topic: rt.value }); });
   const wc = $('wCnt'); if (wc) wc.addEventListener('change', () => ACT.wCount({ v: wc.value }));
   document.querySelectorAll('select[id^="ws"][data-pickp]').forEach(g => g.addEventListener('change', () => {
     if (g.value !== 'Essay') return;
@@ -610,6 +616,80 @@ function builder() {
   const ep = document.querySelector('[data-act-change="essayPick"]');
   if (ep) ep.addEventListener('change', () => { const q = S.d.questions.find(x => String(x.id) === ep.value); if (q) { w.slots[0].question = q.question; w.slots[0].questionId = q.id; builder(); } });
 }
+/* ---- random questions from the bank ---- */
+function randPool(r, exclude) {
+  const mine = new Set(S.d.answers.filter(a => a.user === S.d.me.username).map(a => String(a.questionId)));
+  const all = S.d.questions.filter(q => { if (!q.subtopicId || exclude.has(String(q.id))) return false; const t = topic(q.subtopicId); return t && t.paper === r.paper && (!r.topic || t.topic === r.topic); });
+  const fresh = all.filter(q => !mine.has(String(q.id)));
+  return fresh.length ? fresh : all; // only repeat questions when every one has been written
+}
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function fillSlot(s, q) {
+  const t = topic(q.subtopicId), opts = marksFor(t ? t.paper : '');
+  Object.assign(s, { subtopicId: q.subtopicId, pk: null, pp: null, questionId: q.id, question: q.question, marks: opts.indexOf(Number(q.gpscMarks)) >= 0 ? Number(q.gpscMarks) : opts[0], rnd: true });
+}
+function randomBox(w) {
+  const r = w.rand || (w.rand = { paper: 'GS-1', topic: '' });
+  const tops = [...new Set(S.d.topics.filter(t => t.paper === r.paper).map(t => t.topic))];
+  const n = randPool(r, new Set()).length;
+  return '<div class="slot" style="background:var(--pri2)"><b>🎲 Random questions</b><div class="grid2" style="margin-top:6px"><select id="rP" aria-label="Paper">' + ['GS-1', 'GS-2', 'GS-3', 'GS-4'].map(p => '<option' + (r.paper === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select>' +
+    '<select id="rT" aria-label="Topic"><option value="">Any topic</option>' + tops.map(t => '<option' + (r.topic === t ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select></div>' +
+    '<button class="btn small" style="margin-top:8px" data-act="wRandom">Fill ' + w.count + ' question' + (w.count > 1 ? 's' : '') + ' randomly</button><p class="mute small" style="margin:6px 0 0">Picks questions you have not written yet · ' + n + ' in the bank for this paper · one swap per question</p></div>';
+}
+function withBox(w) {
+  const fr = S.d.users.filter(u => u.username !== S.d.me.username), on = w.with || [];
+  return '<label>Writing with (optional)</label><div style="display:flex;flex-wrap:wrap;gap:6px">' + fr.map(u => '<button class="chip' + (on.indexOf(u.username) >= 0 ? ' on' : '') + '" style="' + (on.indexOf(u.username) >= 0 ? 'background:var(--pri);color:#FFF7EA;border-color:var(--pri)' : '') + '" data-act="wWith" data-v="' + esc(u.username) + '">' + esc(first(u.username)) + '</button>').join('') + '</div>' +
+    (on.length ? '<p class="mute small" style="margin:6px 0 0">Group session: ' + on.map(first).join(', ') + ' get these same questions. Each of you taps Start when ready (any time until the day ends) and uploads from your own phone. You check each other\'s answers.</p>' : '');
+}
+async function makeGroup(w) {
+  const r = await call('createGroup', S.token, { paper: slotPaper(w.slots[0]), members: w.with, items: w.slots.map(s => ({ subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0 })) });
+  return r.id;
+}
+
+/* ---- group sessions ---- */
+function grpDone(g) { const by = {}; S.d.answers.filter(a => a.groupId === g.id).forEach(a => { (by[a.user] = by[a.user] || []).push(a); }); return by; }
+function grpCards() {
+  const d = S.d, me = d.me.username, W = jget('gl_write'), P = jget('gl_pending');
+  const today = (d.groups || []).filter(g => g.day === d.today);
+  let h = '';
+  today.forEach(g => {
+    const done = grpDone(g), mineDone = !!done[me], busyHere = (W && W.groupId === g.id) || (P && P.groupId === g.id);
+    const who = g.members.map(m => '<span class="tag' + (done[m] ? ' ok' : '') + '">' + (done[m] ? '✓ ' : '') + esc(first(m)) + '</span>').join(' ');
+    h += '<div class="card"><div class="row"><b>👥 Group session' + (g.host === me ? '' : ' · ' + esc(first(g.host))) + '</b><span class="mute small">' + esc(g.paper || '') + ' · ' + g.items.length + ' Q</span></div><div style="margin:6px 0">' + who + '</div>' +
+      (mineDone ? '<p class="mute small" style="margin:0 0 6px">You uploaded ✓ · ' + Object.keys(done).length + ' of ' + g.members.length + ' done</p>'
+        : busyHere ? '<p class="mute small" style="margin:0 0 6px">Your set is in progress (see the banner above)</p>'
+        : '<p class="mute small" style="margin:0 0 6px">Same questions for everyone. Your timer starts when you tap Start.</p><div class="grid2"><button class="btn" style="margin-top:0" data-act="gStart" data-id="' + g.id + '">Start</button><button class="btn sec" style="margin-top:0" data-act="gNoTimer" data-id="' + g.id + '">Upload without timer</button></div>') +
+      '<button class="btn small sec" data-act="gOpen" data-id="' + g.id + '">Details · compare answers</button></div>';
+  });
+  const past = (d.groups || []).filter(g => g.day < d.today).length;
+  if (past) h += '<p style="text-align:center;margin:4px 0 10px"><a href="#" data-act="gList">Past group sessions (' + past + ')</a></p>';
+  return h;
+}
+function grpView(id) {
+  const d = S.d, g = (d.groups || []).find(x => x.id === id); if (!g) return;
+  const me = d.me.username, done = grpDone(g), best = (d.groupBest || {})[g.id], mineDone = !!done[me];
+  let h = '<p class="mute small" style="margin-top:0">Started by ' + esc(first(g.host)) + ' · ' + dshort(g.day) + ' · ' + esc(g.paper || '') + '</p><div class="card" style="padding:4px 14px">' +
+    g.items.map((q, i) => '<div class="item"><b style="font-size:14px">' + (i + 1) + '. </b><span class="guj">' + esc(q.question) + '</span><br><span class="mute small">' + q.marks + ' marks · ' + esc(subName(q.subtopicId)) + '</span></div>').join('') + '</div><h2>Who wrote</h2>';
+  g.members.forEach(m => {
+    const list = (done[m] || []).sort((a, b) => a.qIndex - b.qIndex);
+    const checked = list.length && list.every(a => a.status === 'checked');
+    const avg = checked ? Math.round(list.reduce((s, a) => s + (a.notHandwritten ? 0 : Number(a.score) || 0), 0) / list.length * 10) / 10 : null;
+    const win = best && best.winners.indexOf(m) >= 0;
+    h += '<div class="card"><div class="row"><span>' + who(m, 28) + '</span><span>' + (win ? '<span class="tag ok">🏆 Best answer +1</span>' : '') + '</span></div>';
+    if (!list.length) {
+      h += '<p class="mute small" style="margin:6px 0 0">Not uploaded yet</p>' + (m !== me && g.day >= addDaysC(d.today, -1) ? '<button class="btn small sec" data-act="gFor" data-id="' + g.id + '" data-u="' + esc(m) + '">Upload for ' + esc(first(m)) + ' (sitting with you)</button>' : '');
+    } else {
+      h += '<p class="mute small" style="margin:6px 0">' + list.length + ' answer' + (list.length > 1 ? 's' : '') + (list[0].by ? ' · uploaded by ' + esc(first(list[0].by)) : '') + ' · ' + (checked ? 'average ' + avg + '/10' : 'checking by ' + esc(first(list[0].reviewer))) + '</p>';
+      if (m === me || mineDone) h += '<a class="chip" href="https://drive.google.com/file/d/' + esc(list[0].fileId) + '/view" target="_blank">Open answers ↗</a>' + (checked ? list.map(a => a.comment ? '<p class="small" style="margin:6px 0 0"><b>Q' + a.qIndex + ':</b> ' + esc(a.comment) + '</p>' : '').join('') : '');
+    }
+    h += '</div>';
+  });
+  if (!mineDone) h += '<p class="mute small">Friends\' answers open here after you upload yours.</p>';
+  if (g.host === me && !Object.keys(done).length) h += '<button class="btn sec" data-act="gCancel" data-id="' + g.id + '">Cancel this session</button>';
+  openModal('Group session', h);
+}
+function addDaysC(key, n) { const t = new Date(key + 'T12:00:00+05:30').getTime() + n * 86400000; return new Date(t + 330 * 60000).toISOString().slice(0, 10); }
+function grpItems(g) { return g.items.map((q, i) => ({ gi: i, subtopicId: q.subtopicId, questionId: q.questionId, question: q.question, marks: q.marks, seconds: 0, skipped: false })); }
 function keepSlots() { document.querySelectorAll('[data-slot]').forEach(el => { const s = S.w.slots[Number(el.dataset.slot)]; if (s) s.question = el.value; }); }
 function validateSlots() {
   keepSlots();
@@ -637,7 +717,7 @@ function beep() {
 async function keepAwake() { try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {} }
 function startWriting(w) {
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
-  const W = { kind: w.kind, mode: w.mode || 'gpsc', paper: w.paper || '', items: w.slots.map(s => ({ subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0, seconds: 0, skipped: false })), idx: 0, startAt: now(), beeped: false };
+  const W = { kind: w.kind, mode: w.mode || 'gpsc', paper: w.paper || '', groupId: w.groupId || '', items: w.items || w.slots.map((s, i) => ({ gi: i, subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0, seconds: 0, skipped: false })), idx: 0, startAt: now(), beeped: false };
   jset('gl_write', W); closeModal(); keepAwake(); writerView();
 }
 function writerView() {
@@ -678,7 +758,8 @@ function wNext(skip) {
   try { if (wakeLock) wakeLock.release(); } catch (e) {}
   const items = W.items.filter(x => !x.skipped);
   if (!items.length) { toast('All questions skipped'); return; }
-  const pend = { kind: W.kind, mode: W.mode, paper: W.paper, items: items, savedAt: now() };
+  const pend = { kind: W.kind, mode: W.mode, paper: W.paper, groupId: W.groupId || '', items: items, savedAt: now() };
+  S.fp = null;
   jset('gl_pending', pend);
   finishView(pend);
 }
@@ -690,10 +771,11 @@ function finishView(p) {
       const tg = targetSecs(p.kind, x.marks, p.mode, x.subtopicId), ok = x.seconds > 0 && x.seconds <= tg + 15;
       return '<div class="item"><div class="row"><b style="font-size:14px">' + (i + 1) + '. ' + esc(x.question.slice(0, 80)) + '</b>' + (x.seconds ? '<span class="tag ' + (ok ? 'ok' : 'warn') + '">' + fmt(x.seconds) + '</span>' : '') + '</div><span class="mute small">' + (p.kind === 'answer' ? x.marks + ' marks · ' : '') + 'target ' + fmt(tg) + (x.seconds && !ok ? ' · ' + fmt(x.seconds - tg).replace('+', '') + ' over' : '') + '</span></div>';
     }).join('') + '</div>' +
-    '<label for="fpdf">' + (p.items.length > 1 ? 'Upload all answers as one PDF (scan pages in order, number your answers)' : 'Upload your handwritten answer (PDF)') + '</label><input type="file" id="fpdf" accept="application/pdf,.pdf">' +
+    (p.forUser ? '<p class="mute small">' + esc(first(p.forUser)) + '\'s answers to the session questions. Their timings are taken from yours.</p>' : '') +
+    '<label for="fpdf">' + (p.forUser ? 'Upload ' + esc(first(p.forUser)) + '\'s answers as one PDF (in question order)' : p.items.length > 1 ? 'Upload all answers as one PDF (scan pages in order, number your answers)' : 'Upload your handwritten answer (PDF)') + '</label><input type="file" id="fpdf" accept="application/pdf,.pdf">' +
     '<p class="mute small">Tip: the scan button in the Google Drive app or Adobe Scan makes a PDF from photos. Max 10 MB.</p>' +
-    '<button class="btn" data-act="uploadSet">Upload</button><button class="btn sec" data-act="later">Upload later · kept for 24 hours</button>';
-  openModal('Set finished', h);
+    '<button class="btn" data-act="uploadSet">Upload</button>' + (p.forUser ? '' : '<button class="btn sec" data-act="later">Upload later · kept for 24 hours</button>');
+  openModal(p.forUser ? 'Upload for ' + first(p.forUser) : p.groupId ? 'Group set finished' : 'Set finished', h);
 }
 
 /* ======================= check ======================= */
@@ -1566,19 +1648,47 @@ const ACT = {
   wKind: ds => { keepSlots(); S.w.kind = ds.v; S.w.count = 1; S.w.slots = [newSlot(S.w.slots[0].subtopicId)]; if (ds.v !== 'answer') S.w.slots[0].question = ''; builder(); },
   wCount: ds => { keepSlots(); const n = Number(ds.v); S.w.count = n; while (S.w.slots.length < n) S.w.slots.push(newSlot(S.w.slots[S.w.slots.length - 1].subtopicId)); S.w.slots = S.w.slots.slice(0, n); builder(); },
   wMarks: ds => { keepSlots(); S.w.slots[Number(ds.i)].marks = Number(ds.v); builder(); },
-  wStart: () => { try { validateSlots(); startWriting(S.w); } catch (e) { toast(e.message); } },
-  wNoTimer: () => { try { validateSlots(); const p = { kind: S.w.kind, mode: S.w.mode || 'gpsc', paper: S.w.paper || '', items: S.w.slots.map(s => ({ subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0, seconds: 0 })), savedAt: now() }; jset('gl_pending', p); finishView(p); } catch (e) { toast(e.message); } },
+  wStart: (ds, el) => { try { validateSlots(); } catch (e) { toast(e.message); return; }
+    if (S.w.kind === 'answer' && S.w.mode !== 'upsc' && (S.w.with || []).length) return busy(el, async () => { const id = await makeGroup(S.w); startWriting(Object.assign({}, S.w, { groupId: id })); refresh().catch(() => {}); });
+    startWriting(S.w); },
+  wNoTimer: (ds, el) => { try { validateSlots(); } catch (e) { toast(e.message); return; }
+    const go = gid => { const p = { kind: S.w.kind, mode: S.w.mode || 'gpsc', paper: S.w.paper || '', groupId: gid || '', items: S.w.slots.map((s, i) => ({ gi: i, subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0, seconds: 0 })), savedAt: now() }; S.fp = null; jset('gl_pending', p); finishView(p); };
+    if (S.w.kind === 'answer' && S.w.mode !== 'upsc' && (S.w.with || []).length) return busy(el, async () => { go(await makeGroup(S.w)); refresh().catch(() => {}); });
+    go(''); },
+  wRandom: () => { keepSlots(); const w = S.w, used = new Set(), pool = shuffle(randPool(w.rand, used));
+    if (!pool.length) { toast('No bank questions for this choice'); return; }
+    w.slots.forEach((s, i) => { const q = pool[i]; if (q) { fillSlot(s, q); s.swaps = 0; } });
+    if (pool.length < w.slots.length) toast('Only ' + pool.length + ' question' + (pool.length > 1 ? 's' : '') + ' found · fill the rest yourself');
+    builder(); },
+  wSwap: ds => { keepSlots(); const w = S.w, s = w.slots[Number(ds.i)]; if (s.swaps) return;
+    const used = new Set(w.slots.map(x => String(x.questionId)));
+    const t = topic(s.subtopicId), pool = shuffle(randPool(w.rand && w.rand.paper === (t && t.paper) ? w.rand : { paper: t ? t.paper : '', topic: '' }, used));
+    if (!pool.length) { toast('No other question to swap in'); return; }
+    fillSlot(s, pool[0]); s.swaps = 1; builder(); },
+  wWith: ds => { keepSlots(); const a = S.w.with || (S.w.with = []), k = a.indexOf(ds.v); if (k >= 0) a.splice(k, 1); else a.push(ds.v); builder(); },
+  gStart: ds => { const g = (S.d.groups || []).find(x => x.id === ds.id); if (!g) return; if (g.day !== S.d.today) { toast('This session was for ' + dshort(g.day)); return; }
+    if (jget('gl_write') && !confirm('Another set is in progress. Replace it?')) return;
+    startWriting({ kind: 'answer', mode: 'gpsc', paper: g.paper, groupId: g.id, items: grpItems(g) }); },
+  gNoTimer: ds => { const g = (S.d.groups || []).find(x => x.id === ds.id); if (!g) return; const p = { kind: 'answer', mode: 'gpsc', paper: g.paper, groupId: g.id, items: grpItems(g), savedAt: now() }; S.fp = null; jset('gl_pending', p); finishView(p); },
+  gFor: ds => { const g = (S.d.groups || []).find(x => x.id === ds.id); if (!g) return; S.fp = { kind: 'answer', mode: 'gpsc', paper: g.paper, groupId: g.id, forUser: ds.u, items: grpItems(g), savedAt: now() }; finishView(S.fp); },
+  gOpen: ds => grpView(ds.id),
+  gList: () => { const gs = (S.d.groups || []).filter(g => g.day < S.d.today).sort((a, b) => b.ts - a.ts);
+    openModal('Past group sessions', gs.map(g => { const n = Object.keys(grpDone(g)).length; return '<div class="item" data-act="gOpen" data-id="' + g.id + '" style="cursor:pointer"><div class="row"><b>' + dshort(g.day) + ' · ' + esc(g.paper || '') + ' · ' + g.items.length + ' Q</b><span class="mute small">' + n + '/' + g.members.length + ' wrote</span></div><span class="mute small">' + g.members.map(first).join(', ') + '</span></div>'; }).join('')); },
+  gCancel: (ds, el) => { if (!confirm('Cancel this group session for everyone?')) return; busy(el, async () => { await call('cancelGroup', S.token, ds.id); closeModal(); toast('Cancelled'); await refresh(); }); },
   wDone: () => wNext(false),
   wSkip: () => wNext(true),
   wExit: () => { if (!confirm('Exit writing? This set will be discarded.')) return; jset('gl_write', null); $('writer').style.display = 'none'; try { if (wakeLock) wakeLock.release(); } catch (e) {} render(); },
   resumeWriting: () => { keepAwake(); writerView(); },
-  resumeUpload: () => { const p = jget('gl_pending'); if (p) finishView(p); },
+  resumeUpload: () => { S.fp = null; const p = jget('gl_pending'); if (p) finishView(p); },
   later: () => { closeModal(); toast('Saved. Upload within 24 hours from Home.'); render(); },
   uploadSet: (ds, el) => busy(el, async () => {
-    const p = jget('gl_pending'); if (!p) throw new Error('Nothing to upload');
+    const p = S.fp || jget('gl_pending'); if (!p) throw new Error('Nothing to upload');
     const f = await readFile($('fpdf'), 'pdf', 25); if (!f) throw new Error('Choose the PDF');
-    const r = await call('uploadSet', S.token, { kind: p.kind, mode: p.mode || 'gpsc', paper: p.paper || '', b64: f.b64, items: p.items.map(x => ({ subtopicId: x.subtopicId, questionId: x.questionId, question: x.question, marks: x.marks, seconds: x.seconds })) });
-    jset('gl_pending', null); closeModal(); toast('Uploaded ✓ · ' + (r.reviewer ? first(r.reviewer) + ' will check it' : 'saved')); await refresh();
+    const r = p.groupId
+      ? await call('uploadSet', S.token, { groupId: p.groupId, forUser: p.forUser || '', b64: f.b64, items: p.items.map(x => ({ gi: x.gi, seconds: x.seconds })) })
+      : await call('uploadSet', S.token, { kind: p.kind, mode: p.mode || 'gpsc', paper: p.paper || '', b64: f.b64, items: p.items.map(x => ({ subtopicId: x.subtopicId, questionId: x.questionId, question: x.question, marks: x.marks, seconds: x.seconds })) });
+    if (S.fp) S.fp = null; else jset('gl_pending', null);
+    closeModal(); toast('Uploaded ✓' + (r.forUser ? ' for ' + first(r.forUser) : '') + ' · ' + (r.reviewer ? first(r.reviewer) + ' will check it' : 'saved')); await refresh();
   }),
   // check
   check: () => checkView(),
