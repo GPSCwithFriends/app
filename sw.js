@@ -2,7 +2,7 @@
    Opens the app instantly from the phone's copy and updates that copy in the background.
    Data always comes fresh from Apps Script (never cached here).
    When you upload a new index.html, change VERSION below so every phone picks it up. */
-const VERSION = 'gwf-2026-11-14-grp1';
+const VERSION = 'gwf-2026-11-14-qb1';
 const SHELL = ['./', 'index.html', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   'img/logo_full.jpg', 'img/logo_mark.png', 'img/vidhansabha.jpg', 'img/sachivalaya_campus.jpg',

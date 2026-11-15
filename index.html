@@ -564,7 +564,7 @@ function builder() {
   let h = (S.d.upsc ? '<div class="seg" style="margin-bottom:8px"><button data-act="wMode" data-v="gpsc" class="' + (!U ? 'on' : '') + '">GPSC pattern</button><button data-act="wMode" data-v="upsc" class="' + (U ? 'on' : '') + '">UPSC pattern</button></div>' + (U ? '<p class="mute small" style="margin:0 0 6px">Shared GS topics count for the group too. Optional and extra-GS topics stay private and go to ' + esc(first(st.upscChecker || '')) + '.</p>' : '') : '') +
     '<div class="seg"><button data-act="wKind" data-v="answer" class="' + (w.kind === 'answer' ? 'on' : '') + '">Answers</button><button data-act="wKind" data-v="essay" class="' + (w.kind === 'essay' ? 'on' : '') + '">Essay</button><button data-act="wKind" data-v="fullpaper" class="' + (w.kind === 'fullpaper' ? 'on' : '') + '">Full paper</button></div>';
   if (w.kind === 'answer') {
-    if (!U) h += randomBox(w);
+    h += randomBox(w);
     h += '<label for="wCnt">How many answers?</label><select id="wCnt">' + Array.from({ length: 15 }, (_, k) => k + 1).map(n => '<option value="' + n + '"' + (w.count === n ? ' selected' : '') + '>' + n + ' answer' + (n > 1 ? 's' : '') + (n > 1 ? ' · about ' + Math.round(n * 9.5) + ' min' : '') + '</option>').join('') + '</select>' + (w.count > 1 ? '<p class="mute small" style="margin:6px 0 0">Scan all answers into one PDF, in order.</p>' : '');
     w.slots.forEach((s, i) => {
       const paper = slotPaper(s) || s.pp || '', opts = U ? Object.keys(uMarksTable(s.subtopicId, paper)).map(Number) : marksFor(paper);
@@ -594,8 +594,9 @@ function builder() {
   h += '<button class="btn dark" data-act="wStart">' + (grp ? 'Start group session · start writing' : 'Start writing mode') + '</button><button class="btn sec" data-act="wNoTimer">' + (grp ? 'Start group session · upload without timer' : 'I already wrote it · upload without timer') + '</button>';
   S.nextPool = S.pool; openModal('Write answers', h); S.modalCtx = { type: 'builder' };
   const fp = $('wfp'); if (fp) fp.addEventListener('change', () => { w.paper = fp.value; });
-  const rp = $('rP'); if (rp) rp.addEventListener('change', () => { keepSlots(); w.rand = { paper: rp.value, topic: '' }; builder(); });
-  const rt = $('rT'); if (rt) rt.addEventListener('change', () => { w.rand = Object.assign(w.rand || {}, { topic: rt.value }); });
+  const rp = $('rP'); if (rp) rp.addEventListener('change', () => { keepSlots(); w.rand = { paper: rp.value, topic: '', src: (w.rand || {}).src || '' }; builder(); });
+  const rs = $('rS'); if (rs) rs.addEventListener('change', () => { keepSlots(); w.rand = Object.assign(w.rand || {}, { src: rs.value }); builder(); });
+  const rt = $('rT'); if (rt) rt.addEventListener('change', () => { keepSlots(); w.rand = Object.assign(w.rand || {}, { topic: rt.value }); builder(); });
   const wc = $('wCnt'); if (wc) wc.addEventListener('change', () => ACT.wCount({ v: wc.value }));
   document.querySelectorAll('select[id^="ws"][data-pickp]').forEach(g => g.addEventListener('change', () => {
     if (g.value !== 'Essay') return;
@@ -617,24 +618,36 @@ function builder() {
   if (ep) ep.addEventListener('change', () => { const q = S.d.questions.find(x => String(x.id) === ep.value); if (q) { w.slots[0].question = q.question; w.slots[0].questionId = q.id; builder(); } });
 }
 /* ---- random questions from the bank ---- */
-function randPool(r, exclude) {
+function qPaper(q, U) { if (U && q.source === 'UPSC' && q.paper) return q.paper; const t = topic(q.subtopicId); return t ? t.paper : ''; }
+function qSrc(q) { return q.source === 'UPSC' ? 'UPSC' : q.source === 'GPSC' ? 'GPSC' : 'Other'; }
+function randBase(r, U) {
+  return S.d.questions.filter(q => q.subtopicId && (U || !isUpscId(q.subtopicId)) && topic(q.subtopicId) && qPaper(q, U) === r.paper && (!r.src || qSrc(q) === r.src));
+}
+function randPool(r, exclude, U) {
   const mine = new Set(S.d.answers.filter(a => a.user === S.d.me.username).map(a => String(a.questionId)));
-  const all = S.d.questions.filter(q => { if (!q.subtopicId || exclude.has(String(q.id))) return false; const t = topic(q.subtopicId); return t && t.paper === r.paper && (!r.topic || t.topic === r.topic); });
+  const all = randBase(r, U).filter(q => !exclude.has(String(q.id)) && (!r.topic || topic(q.subtopicId).topic === r.topic));
   const fresh = all.filter(q => !mine.has(String(q.id)));
   return fresh.length ? fresh : all; // only repeat questions when every one has been written
 }
 function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-function fillSlot(s, q) {
-  const t = topic(q.subtopicId), opts = marksFor(t ? t.paper : '');
-  Object.assign(s, { subtopicId: q.subtopicId, pk: null, pp: null, questionId: q.id, question: q.question, marks: opts.indexOf(Number(q.gpscMarks)) >= 0 ? Number(q.gpscMarks) : opts[0], rnd: true });
+function fillSlot(s, q, U) {
+  const t = topic(q.subtopicId);
+  let m;
+  if (U) { const opts = Object.keys(uMarksTable(q.subtopicId)).map(Number), om = Number(q.om) || Number(q.gpscMarks) || opts[0]; m = opts.reduce((b, x) => Math.abs(x - om) < Math.abs(b - om) ? x : b, opts[0]); }
+  else { const opts = marksFor(t ? t.paper : ''); m = opts.indexOf(Number(q.gpscMarks)) >= 0 ? Number(q.gpscMarks) : opts[0]; }
+  Object.assign(s, { subtopicId: q.subtopicId, pk: null, pp: null, questionId: q.id, question: q.question, marks: m, rnd: true });
 }
 function randomBox(w) {
-  const r = w.rand || (w.rand = { paper: 'GS-1', topic: '' });
-  const tops = [...new Set(S.d.topics.filter(t => t.paper === r.paper).map(t => t.topic))];
-  const n = randPool(r, new Set()).length;
+  const U = w.mode === 'upsc' && !!S.d.upsc;
+  const r = w.rand || (w.rand = { paper: 'GS-1', topic: '', src: '' });
+  const base = randBase(r, U);
+  const tops = [...new Set(base.map(q => topic(q.subtopicId).topic))];
+  if (r.topic && tops.indexOf(r.topic) < 0) r.topic = '';
+  const n = randPool(r, new Set(), U).length;
   return '<div class="slot" style="background:var(--pri2)"><b>🎲 Random questions</b><div class="grid2" style="margin-top:6px"><select id="rP" aria-label="Paper">' + ['GS-1', 'GS-2', 'GS-3', 'GS-4'].map(p => '<option' + (r.paper === p ? ' selected' : '') + '>' + p + '</option>').join('') + '</select>' +
-    '<select id="rT" aria-label="Topic"><option value="">Any topic</option>' + tops.map(t => '<option' + (r.topic === t ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select></div>' +
-    '<button class="btn small" style="margin-top:8px" data-act="wRandom">Fill ' + w.count + ' question' + (w.count > 1 ? 's' : '') + ' randomly</button><p class="mute small" style="margin:6px 0 0">Picks questions you have not written yet · ' + n + ' in the bank for this paper · one swap per question</p></div>';
+    '<select id="rS" aria-label="Source"><option value="">All sources</option>' + [['UPSC', 'UPSC past papers'], ['GPSC', 'GPSC past papers'], ['Other', 'Test series']].map(o => '<option value="' + o[0] + '"' + (r.src === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div>' +
+    '<select id="rT" aria-label="Topic" style="margin-top:6px"><option value="">Any topic</option>' + tops.map(t => '<option' + (r.topic === t ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' +
+    '<button class="btn small" style="margin-top:8px" data-act="wRandom">Fill ' + w.count + ' question' + (w.count > 1 ? 's' : '') + ' randomly</button><p class="mute small" style="margin:6px 0 0">' + n + ' you have not written yet · one swap per question' + (U ? ' · UPSC papers as UPSC set them' : '') + '</p></div>';
 }
 function withBox(w) {
   const fr = S.d.users.filter(u => u.username !== S.d.me.username), on = w.with || [];
@@ -1655,16 +1668,16 @@ const ACT = {
     const go = gid => { const p = { kind: S.w.kind, mode: S.w.mode || 'gpsc', paper: S.w.paper || '', groupId: gid || '', items: S.w.slots.map((s, i) => ({ gi: i, subtopicId: s.subtopicId, questionId: s.questionId, question: s.question, marks: Number(s.marks) || 0, seconds: 0 })), savedAt: now() }; S.fp = null; jset('gl_pending', p); finishView(p); };
     if (S.w.kind === 'answer' && S.w.mode !== 'upsc' && (S.w.with || []).length) return busy(el, async () => { go(await makeGroup(S.w)); refresh().catch(() => {}); });
     go(''); },
-  wRandom: () => { keepSlots(); const w = S.w, used = new Set(), pool = shuffle(randPool(w.rand, used));
+  wRandom: () => { keepSlots(); const w = S.w, U = w.mode === 'upsc' && !!S.d.upsc, pool = shuffle(randPool(w.rand, new Set(), U));
     if (!pool.length) { toast('No bank questions for this choice'); return; }
-    w.slots.forEach((s, i) => { const q = pool[i]; if (q) { fillSlot(s, q); s.swaps = 0; } });
+    w.slots.forEach((s, i) => { const q = pool[i]; if (q) { fillSlot(s, q, U); s.swaps = 0; } });
     if (pool.length < w.slots.length) toast('Only ' + pool.length + ' question' + (pool.length > 1 ? 's' : '') + ' found · fill the rest yourself');
     builder(); },
   wSwap: ds => { keepSlots(); const w = S.w, s = w.slots[Number(ds.i)]; if (s.swaps) return;
     const used = new Set(w.slots.map(x => String(x.questionId)));
-    const t = topic(s.subtopicId), pool = shuffle(randPool(w.rand && w.rand.paper === (t && t.paper) ? w.rand : { paper: t ? t.paper : '', topic: '' }, used));
+    const U = w.mode === 'upsc' && !!S.d.upsc, pool = shuffle(randPool(w.rand || { paper: 'GS-1' }, used, U));
     if (!pool.length) { toast('No other question to swap in'); return; }
-    fillSlot(s, pool[0]); s.swaps = 1; builder(); },
+    fillSlot(s, pool[0], U); s.swaps = 1; builder(); },
   wWith: ds => { keepSlots(); const a = S.w.with || (S.w.with = []), k = a.indexOf(ds.v); if (k >= 0) a.splice(k, 1); else a.push(ds.v); builder(); },
   gStart: ds => { const g = (S.d.groups || []).find(x => x.id === ds.id); if (!g) return; if (g.day !== S.d.today) { toast('This session was for ' + dshort(g.day)); return; }
     if (jget('gl_write') && !confirm('Another set is in progress. Replace it?')) return;
@@ -1757,7 +1770,7 @@ const ACT = {
   admReset: (ds, el) => busy(el, async () => { if (!confirm('Reset password for ' + ds.u + '?')) return; await call('adminResetPassword', S.token, ds.u); toast('Reset to gpsc2026'); }),
   admRemove: (ds, el) => busy(el, async () => { if (!confirm('Remove ' + ds.u + '? Their notes and answers stay in the library.')) return; await call('adminRemoveMember', S.token, ds.u); toast('Removed'); await refresh(); }),
   admSettings: (ds, el) => busy(el, async () => { await call('adminSaveSettings', S.token, { rulesStart: $('asR').value, examDate: $('asE').value, essayMinutes: $('asM').value, essayWords: $('asW').value, revSyllabus: $('asS').value, revCurrent: $('asC').value, oldNotesPerDay: $('asO').value, penalty: $('asP').value, imageBase: $('asI').value, upscUsers: $('asU').value, upscChecker: $('asK').value, upscExamDate: $('asX').value }); toast('Settings saved'); await refresh(); }),
-  admImport: (ds, el) => busy(el, async () => { const t = await readFile($('aqF'), 'text', 5); if (!t) throw new Error('Choose the .tsv file'); const r = await call('adminImportQuestions', S.token, t); toast('Imported ' + r.added + ' · skipped ' + r.skipped); S._asked = null; await refresh(); }),
+  admImport: (ds, el) => busy(el, async () => { const t = await readFile($('aqF'), 'text', 5); if (!t) throw new Error('Choose the .tsv file'); const r = await call('adminImportQuestions', S.token, t); toast('Imported ' + r.added + ' · skipped ' + r.skipped + (r.noTopic ? ' · ' + r.noTopic + ' need the UPSC track' : '')); S._asked = null; await refresh(); }),
 };
 Object.assign(ACT, P2ACT, PLANACT, UACT);
 var ACT_write;
