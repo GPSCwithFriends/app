@@ -222,6 +222,7 @@ async function refresh() {
   const keep = Object.assign({}, d, { topics: null, questions: null, upsc: d.upsc ? Object.assign({}, d.upsc, { topics: null }) : null });
   jset('gl_state', { token: S.token, d: keep });
   render();
+  nativeSync();
 }
 function cachedState() {
   const c = jget('gl_state'), st = jget('gl_static');
@@ -415,6 +416,7 @@ function pwForm(forced) {
     '<label for="np1">New password</label><input type="password" id="np1"><label for="np2">Repeat password</label><input type="password" id="np2"><button class="btn" data-act="savePw">Save password</button>';
 }
 async function doLogout(expired) {
+  nativeOff();
   if (!expired && S.token) { try { await call('logout', S.token); } catch (e) {} }
   S.token = null; S.d = null; S.st = null; store('gl_token', null); jset('gl_state', null); jset('gl_static', null); closeModal(); loginView();
   if (expired) toast('Please log in again');
@@ -465,6 +467,8 @@ function render() {
   const v = { home: homeView, library: libraryView, progress: progressView, profile: profileView }[S.tab]();
   $('app').innerHTML = v + '<nav aria-label="Main">' + tabs.map(t => '<button data-act="tab" data-v="' + t[0] + '" class="' + (S.tab === t[0] ? 'on' : '') + '">' + ico(t[1], null, 22) + t[2] + '<i></i></button>').join('') + '</nav>';
   tick();
+  const rt = $('remTime'); if (rt) rt.addEventListener('change', () => { const c = remCfg(); c.time = rt.value; jset('gl_rem', c); nativeSync(); toast('Reminder set for ' + rt.options[rt.selectedIndex].text); });
+  if ($('remPerm')) remPermShow();
 }
 
 /* ======================= home / today's work ======================= */
@@ -787,7 +791,7 @@ function finishView(p) {
     (p.forUser ? '<p class="mute small">' + esc(first(p.forUser)) + '\'s answers to the session questions. Their timings are taken from yours.</p>' : '') +
     '<label for="fpdf">' + (p.forUser ? 'Upload ' + esc(first(p.forUser)) + '\'s answers as one PDF (in question order)' : p.items.length > 1 ? 'Upload all answers as one PDF (scan pages in order, number your answers)' : 'Upload your handwritten answer (PDF)') + '</label><input type="file" id="fpdf" accept="application/pdf,.pdf">' +
     '<p class="mute small">Tip: the scan button in the Google Drive app or Adobe Scan makes a PDF from photos. Max 10 MB.</p>' +
-    '<button class="btn" data-act="uploadSet">Upload</button>' + (p.forUser ? '' : '<button class="btn sec" data-act="later">Upload later · kept for 24 hours</button>');
+    aiChoice(p) + '<button class="btn" data-act="uploadSet">Upload</button>' + (p.forUser ? '' : '<button class="btn sec" data-act="later">Upload later · kept for 24 hours</button>');
   openModal(p.forUser ? 'Upload for ' + first(p.forUser) : p.groupId ? 'Group set finished' : 'Set finished', h);
 }
 
@@ -857,11 +861,67 @@ function libraryView() {
   return h;
 }
 function answerRow(a) {
-  const st = a.status === 'checked' ? (a.notHandwritten === true ? '<span class="tag bad">Not handwritten</span>' : '<span class="tag ok">' + a.score + '/10</span>') : '<span class="tag">Checking: ' + esc(first(a.reviewer)) + '</span>';
+  const st = (a.status === 'checked' ? (a.notHandwritten === true ? '<span class="tag bad">Not handwritten</span>' : '<span class="tag ok">' + a.score + '/10</span>') : a.status === 'aionly' ? '<span class="tag b">AI check only</span>' : '<span class="tag">Checking: ' + esc(first(a.reviewer)) + '</span>') + aiTag(a);
   const tg = targetSecs(a.kind, a.marks), ot = a.seconds > 0 && a.seconds <= tg + 15;
   return '<div class="item"><div class="qtext" style="font-weight:600;font-size:14px">' + esc(a.question.slice(0, 220)) + '</div><div class="mute small">' + esc(first(a.user)) + ' · ' + dshort(a.day) + ' · ' + (a.kind === 'answer' ? a.marks + ' marks · ' + esc(subName(a.subtopicId)) : a.kind === 'essay' ? 'Essay' : 'Full paper') + '</div>' +
     '<div class="row" style="margin-top:6px"><span>' + st + ' ' + (a.seconds ? '<span class="tag ' + (ot ? 'ok' : '') + '">' + fmt(a.seconds) + '</span>' : '') + '</span><button class="btn small sec" data-act="view" data-f="' + esc(a.fileId) + '">View</button></div>' +
     (a.comment ? '<div class="mute small" style="margin-top:4px">💬 ' + esc(first(a.reviewer)) + ': ' + esc(a.comment) + '</div>' : '') + '</div>';
+}
+/* ---- AI checking (Gemini) ---- */
+function aiChoice(p) {
+  if (!S.d.ai || p.groupId || p.forUser) return S.d.ai && (p.groupId || p.forUser) ? '<p class="mute small">🤖 AI will also check this set · a friend checks it too</p>' : '';
+  const c = S.chk || 'both';
+  return '<label>Who checks it</label><div class="seg"><button data-act="chkMode" data-v="both" class="' + (c === 'both' ? 'on' : '') + '">AI + friend</button><button data-act="chkMode" data-v="ai" class="' + (c === 'ai' ? 'on' : '') + '">AI only</button></div>' +
+    '<p class="mute small" style="margin:6px 0 0">' + (c === 'ai' ? 'No friend check, so no marks points. AI feedback in a few minutes.' : 'AI feedback in a few minutes; a friend checks for points as usual.') + '</p>';
+}
+function aiRep(a) { try { return JSON.parse(a.aiReport || '{}'); } catch (e) { return {}; } }
+function aiTag(a) {
+  if (a.user !== S.d.me.username || !a.aiStatus) return '';
+  if (a.aiStatus === 'done') return ' <button class="chip" style="padding:2px 9px;font-size:12px" data-act="aiOpen" data-v="' + esc(a.setId) + '">🤖 ' + (a.aiScore !== '' && a.aiScore != null ? a.aiScore + '/' + a.marks : 'AI report') + '</button>';
+  if (a.aiStatus === 'error') return ' <button class="chip" style="padding:2px 9px;font-size:12px;color:var(--bad)" data-act="aiOpen" data-v="' + esc(a.setId) + '">🤖 AI couldn\'t check</button>';
+  return ' <span class="tag">🤖 AI checking…</span>';
+}
+function aiView(setId) {
+  const list = S.d.answers.concat(S.d.upsc ? S.d.upsc.answers || [] : []).filter(a => a.setId === setId && a.user === S.d.me.username).sort((a, b) => a.qIndex - b.qIndex);
+  if (!list.length) return;
+  const r0 = aiRep(list[0]);
+  let h = '';
+  if (list[0].aiStatus === 'error') {
+    h += '<div class="banner bad" style="cursor:default"><span>' + esc(r0.error || 'AI could not check this set') + '</span></div><button class="btn" data-act="aiRetry" data-v="' + esc(setId) + '">Try AI again</button>';
+    return openModal('AI check', h);
+  }
+  const ov = r0.overall || {};
+  h += '<p class="mute small" style="margin-top:0">AI marks are feedback only and don\'t change points. Reading: ' + esc(r0.reading || '—') + (r0.handwritten === false ? ' · <b>looks typed, not handwritten</b>' : '') + '</p>';
+  if (ov.top_fix || ov.summary) h += '<div class="card" style="border-color:var(--gold)"><b>Top fix for your next answer</b><p style="margin:6px 0 0">' + esc(ov.top_fix || '') + '</p>' + (ov.summary ? '<p class="mute small" style="margin:8px 0 0">' + esc(ov.summary) + '</p>' : '') + '</div>';
+  list.forEach(a => {
+    const q = aiRep(a).q || {};
+    h += '<div class="card"><div class="row" style="align-items:flex-start"><b style="flex:1;font-size:14px">Q' + a.qIndex + '. ' + esc(a.question.slice(0, 160)) + '</b><span class="tag b">' + (q.marks != null ? q.marks : '—') + '/' + a.marks + '</span></div>' +
+      '<div class="mute small" style="margin-top:4px">' + (q.attempted === false ? 'Not attempted' : (q.words ? '~' + q.words + ' words · ' : '') + 'demand ' + esc(q.demand_met || '—')) + '</div>' +
+      ((q.strengths || []).length ? '<div class="small" style="margin-top:8px"><b style="color:var(--sage)">Worked</b>' + q.strengths.map(x => '<div>✓ ' + esc(x) + '</div>').join('') + '</div>' : '') +
+      ((q.missing || []).length ? '<div class="small" style="margin-top:8px"><b style="color:var(--terra)">Missing</b>' + q.missing.map(x => '<div>• ' + esc(x) + '</div>').join('') + '</div>' : '') +
+      (q.add_next_time ? '<div class="small" style="margin-top:8px;padding:8px 10px;border-radius:10px;background:var(--pri2)"><b>Next time:</b> ' + esc(q.add_next_time) + '</div>' : '') +
+      ((q.focus || []).length ? '<div class="chips" style="margin-top:8px">' + q.focus.map(f => '<span class="tag ' + (f.status === 'done' ? 'ok' : f.status === 'partly' ? 'warn' : 'bad') + '">' + (f.status === 'done' ? '✓ ' : f.status === 'partly' ? '½ ' : '✗ ') + esc(f.point) + '</span>').join('') + '</div>' : '') + '</div>';
+  });
+  if ((r0.newFocus || []).length) h += '<p class="mute small">New focus points noticed: ' + r0.newFocus.map(esc).join(' · ') + '</p>';
+  openModal('AI check', h);
+}
+function aiCoach() {
+  const ai = S.d.ai; if (!ai) return '';
+  const mine = S.d.answers.concat(S.d.upsc ? S.d.upsc.answers || [] : []).filter(a => a.user === S.d.me.username && a.aiStatus === 'done' && a.aiReport).sort((a, b) => a.ts - b.ts);
+  const hist = {}; mine.forEach(a => ((aiRep(a).q || {}).focus || []).forEach(f => (hist[f.point] = hist[f.point] || []).push(f.status)));
+  const dot = st => '<span title="' + st + '" style="display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:3px;background:' + (st === 'done' ? 'var(--sage)' : st === 'partly' ? 'var(--gold)' : '#D9A79B') + '"></span>';
+  const sc = mine.filter(a => a.aiScore !== '' && a.aiScore != null && Number(a.marks));
+  const avg = sc.length ? Math.round(sc.slice(-10).reduce((x, a) => x + Number(a.aiScore) / Number(a.marks), 0) / Math.min(10, sc.length) * 100) : null;
+  let h = '<div class="card"><div class="row"><span class="h2" style="margin:0;font-size:18px">🤖 AI coach</span>' + (avg !== null ? '<span class="tag b">last 10: ' + avg + '%</span>' : '') + '</div>';
+  h += '<p class="mute small" style="margin:4px 0 8px">Your focus points. Each dot is one answer the AI checked (newest on the right).</p>';
+  if (!ai.profile.focus.length) h += '<p class="small">No focus points yet. Add your own below, or the AI adds ones it sees repeatedly.</p>';
+  ai.profile.focus.forEach(f => { const hs = (hist[f] || []).slice(-8); h += '<div style="padding:7px 0;border-top:1px dashed var(--line)"><div class="small" style="font-weight:600">' + esc(f) + '</div><div style="margin-top:4px">' + (hs.length ? hs.map(dot).join('') : '<span class="mute small">not checked yet</span>') + '</div></div>'; });
+  if (ai.profile.mastered.length) h += '<p class="small" style="margin:8px 0 0;color:var(--sage)">🏅 Mastered: ' + ai.profile.mastered.map(esc).join(' · ') + '</p>';
+  h += '<details style="margin-top:8px"><summary class="small">Edit my AI profile</summary><label for="aiL">I write in</label><input type="text" id="aiL" value="' + esc(ai.profile.language) + '" placeholder="Gujarati">' +
+    '<label for="aiO">Optional subject / background</label><input type="text" id="aiO" value="' + esc(ai.profile.optional) + '" placeholder="Gujarati Literature">' +
+    '<label for="aiF">Focus points (one per line)</label><textarea id="aiF" placeholder="Add a Gujarat example in every answer">' + esc(ai.profile.focus.join('\n')) + '</textarea>' +
+    '<button class="btn" data-act="aiProf">Save</button></details></div>';
+  return h;
 }
 function subView(id) {
   const d = S.d, t = topic(id); if (!t) return;
@@ -1226,7 +1286,7 @@ function tgtRow(i, idx, pl, mine) {
   let h = '<div style="padding:9px 0;border-bottom:1px dashed var(--line)"><div class="row" style="align-items:flex-start;gap:8px"><span style="flex:1;font-weight:600' + (i.done ? ';color:var(--sage)' : '') + '">' + (i.done ? '✓ ' : '') + esc(tgtLabel(i)) + '</span>' +
     (auto ? '<span class="mute small">' + i.got + '/' + i.need + '</span>' : mine && pl.week === w.mon ? '<button class="btn small ' + (i.done ? '' : 'sec') + '" data-act="plTick" data-id="' + pl.id + '" data-v="' + idx + '">' + (i.done ? 'Done ✓' : 'Mark done') + '</button>' : '<span class="mute small">' + (i.done ? 'done' : 'not yet') + '</span>') + '</div>';
   if (auto) h += '<div class="pb" style="margin-top:6px;height:6px"><i style="width:' + Math.round(pct * 100) + '%;background:' + (i.done ? 'var(--sage)' : 'var(--gold)') + '"></i></div>';
-  if (i.type === 'subtopics') h += '<div class="small" style="margin-top:6px;line-height:1.6">' + i.ids.map(id => '<span style="' + ((i.doneIds || []).map(String).includes(String(id)) ? 'color:var(--sage)' : 'color:var(--mute)') + '">' + ((i.doneIds || []).map(String).includes(String(id)) ? '✓ ' : '○ ') + esc(subName(id)) + '</span>').join('<br>') + '</div>';
+  if (i.type === 'subtopics') h += planDays(i, pl);
   if (mine && pl.week === w.mon && auto && share) h += '<div class="small" style="margin-top:4px;color:var(--terra);font-weight:600">Today: ' + share + (i.type === 'answers' ? ' answer' : i.type === 'subtopics' ? ' subtopic' : i.type === 'revisions' ? ' revision' : ' topic') + (share > 1 ? 's' : '') + '</div>';
   return h + '</div>';
 }
@@ -1238,6 +1298,7 @@ function planHomeCard() {
     '<div style="flex:1"><div class="h2" style="margin:0;font-size:18px">This week</div><div class="mute small">' + pr.doneCount + ' of ' + pr.items.length + ' targets done · ' + w.left + ' day' + (w.left > 1 ? 's' : '') + ' left</div></div><button class="btn small sec" data-act="plan" data-v="' + w.mon + '">Open</button></div>';
   if (behind(pl)) h += '<div class="banner warn" style="cursor:default;margin:8px 0"><span>Behind pace — ' + Math.round(pr.pct * 100) + '% done with ' + w.left + ' days left. Today\'s share below.</span></div>';
   if (nud.length) h += '<div class="banner info" style="cursor:default;margin:8px 0"><span>👋 ' + nud.map(first).join(', ') + ' nudged you about your plan</span></div>';
+  h += todaySlice(pl);
   h += pr.items.map((i, k) => tgtRow(i, k, pl, true)).join('');
   if (w.dow >= 6 && !nx) h += '<button class="btn sec" data-act="plan" data-v="' + w.next + '" style="margin-top:10px">Plan next week</button>';
   return h + '</div>';
@@ -1270,7 +1331,7 @@ function planView(week) {
   } else {
     if (!S.pe || S.pe.week !== week) {
       const prev = myPlan(week === w.next ? w.mon : w.prev), sg = planSuggest();
-      const t = pl ? pl.progress.items.map(i => i.type === 'subtopics' ? { type: 'subtopics', ids: i.ids } : i.type === 'custom' ? { type: 'custom', text: i.text } : { type: i.type, n: i.need }) : [{ type: 'answers', n: Math.max(7, (sg.last.answers || 0) + 1) }];
+      const t = pl ? pl.progress.items.map(i => i.type === 'subtopics' ? { type: 'subtopics', ids: i.ids, days: i.days || {}, rev: i.rev || '' } : i.type === 'custom' ? { type: 'custom', text: i.text } : { type: i.type, n: i.need }) : [{ type: 'answers', n: Math.max(7, (sg.last.answers || 0) + 1) }];
       S.pe = { week: week, vis: pl ? pl.visibility : 'public', t: t, carry: prev ? prev.progress.items.filter(i => !i.done && i.type !== 'answers') : [] };
     }
     const e = S.pe, sg = planSuggest(), has = ty => e.t.some(x => x.type === ty);
@@ -1278,7 +1339,7 @@ function planView(week) {
     h += '<div class="card"><div class="mute small" style="margin-bottom:6px">Last week: ' + sg.last.answers + ' answers · ' + sg.lastSubs + ' subtopics · ' + sg.last.revisions + ' revisions · ' + sg.last.ca + ' current affairs</div>';
     e.t.forEach((t, k) => {
       h += '<div style="padding:10px 0;border-bottom:1px dashed var(--line)"><div class="row"><b>' + (t.type === 'answers' ? 'Answers to write' : t.type === 'revisions' ? 'Revisions to clear' : t.type === 'ca' ? 'Current-affairs topics' : t.type === 'subtopics' ? 'Subtopics to cover' : 'My own target') + '</b>' + (t.type !== 'answers' ? '<button class="btn small sec" data-act="peDel" data-v="' + k + '" aria-label="Remove">✕</button>' : '<span class="mute small">required · min 7</span>') + '</div>';
-      if (t.type === 'subtopics') h += '<div class="small" style="margin:6px 0;line-height:1.7">' + (t.ids.length ? t.ids.map((id, j) => '<span class="chip on" style="display:inline-flex;margin:2px">' + esc(subName(id)) + ' <span data-act="peSubDel" data-v="' + k + '" data-id="' + j + '" style="margin-left:6px;cursor:pointer">✕</span></span>').join('') : '<span class="mute">None yet — choose below</span>') + '</div>' + picker('peS' + k, '', t.pk || null, t.pp || null);
+      if (t.type === 'subtopics') h += subSummary(t, k);
       else if (t.type === 'custom') h += '<input type="text" id="peC' + k + '" maxlength="120" value="' + esc(t.text || '') + '" placeholder="e.g. Laxmikanth ch. 20–24 · one GS-3 mock">';
       else h += '<div style="display:flex;align-items:center;gap:10px;margin-top:6px"><button class="btn small sec" data-act="peN" data-v="' + k + '" data-id="-1">−</button><b style="font:800 22px Fraunces,Georgia,serif;min-width:36px;text-align:center">' + t.n + '</b><button class="btn small sec" data-act="peN" data-v="' + k + '" data-id="1">+</button>' + (t.type === 'answers' ? '<span class="mute small">≈ ' + Math.ceil(t.n / 7) + ' a day</span>' : '') + '</div>';
       h += '</div>';
@@ -1294,9 +1355,113 @@ function planView(week) {
     (behind(p) && !String(p.nudges || '').split(',').includes(d.me.username) ? '<button class="btn small" data-act="plNudge" data-id="' + p.id + '" style="margin-top:8px">👋 Nudge ' + esc(first(p.user)) + '</button>' : '') + '</details>').join('');
   openModal('Weekly Sankalp', h); S.modalCtx = { type: 'plan', week: week };
   if (S.pe && S.pe.week === week) S.pe.t.forEach((t, k) => {
-    if (t.type === 'subtopics') { const sel = $('peS' + k); if (sel) sel.addEventListener('change', () => { if (!sel.value) return; keepPe(); if (t.ids.length >= 15) return toast('Up to 15 subtopics'); if (!t.ids.map(String).includes(sel.value)) t.ids.push(Number(sel.value)); t.pk = $('peS' + k + 'P').value; t.pp = $('peS' + k + 'G').value; planView(week); }); }
     if (t.type === 'custom') { const c = $('peC' + k); if (c) c.addEventListener('input', () => { t.text = c.value; }); }
   });
+  document.querySelectorAll('[data-perev]').forEach(sel => sel.addEventListener('change', () => { keepPe(); const t = S.pe.t[Number(sel.dataset.perev)]; const was = t.rev; t.rev = sel.value; if (t.rev) Object.keys(t.days).forEach(id => { if (t.days[id] === t.rev) delete t.days[id]; }); if (was !== t.rev && Object.keys(t.days).length) autoSpread(t, S.pe.week); planView(S.pe.week); }));
+  document.querySelectorAll('[data-peday]').forEach(sel => sel.addEventListener('change', () => { keepPe(); const t = S.pe.t[Number(sel.dataset.peday)]; if (sel.value) t.days[sel.dataset.id] = sel.value; else delete t.days[sel.dataset.id]; planView(S.pe.week); }));
+}
+/* ---- Sankalp: pick many subtopics, spread them over the week ---- */
+const SUB_MAX = 30;
+const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+function weekDays(week) { return [0, 1, 2, 3, 4, 5, 6].map(i => addDays(week, i)); }
+function subOrder(id) { const i = S.d.topics.findIndex(t => String(t.id) === String(id)); return i < 0 ? 1e9 : i; }
+function subInfo(id) {
+  const me = S.d.me.username, sid = String(id);
+  const notes = S.d.coverage.some(c => c.user === me && String(c.subtopicId) === sid);
+  const ans = S.d.answers.filter(a => a.user === me && String(a.subtopicId) === sid);
+  const chk = ans.filter(a => a.status === 'checked');
+  const avg = chk.length ? chk.reduce((x, a) => x + (a.notHandwritten ? 0 : Number(a.score) || 0), 0) / chk.length : null;
+  const due = S.d.revisions.some(r => r.user === me && String(r.subtopicId) === sid && r.status === 'due' && r.due && r.due <= addDays(S.d.today, 7));
+  return { notes: notes, ans: ans.length, low: avg !== null && avg < 5, due: due, fresh: !notes && !ans.length };
+}
+function subSummary(t, k) {
+  const by = {}; t.ids.forEach(id => { const x = topic(id); const n = x ? x.topic : '?'; by[n] = (by[n] || 0) + 1; });
+  const parts = Object.keys(by).map(n => esc(n.split(/[–,(]/)[0].trim().slice(0, 28)) + ' ' + by[n]);
+  let h = '<div class="small mute" style="margin:6px 0">' + (t.ids.length ? t.ids.length + ' chosen · ' + parts.join(' · ') : 'None chosen yet') + '</div>' +
+    '<button class="btn small sec" data-act="pkOpen" data-v="' + k + '">' + (t.ids.length ? 'Change subtopics' : 'Choose subtopics') + '</button>';
+  if (t.ids.length) h += spreadEditor(t, k);
+  return h;
+}
+function spreadEditor(t, k) {
+  const days = weekDays(S.pe.week);
+  let h = '<div style="margin-top:12px;padding:10px 12px;border-radius:14px;background:#fff;border:1px solid var(--line)">' +
+    '<div class="row"><b style="font-size:14px">Day by day</b><button class="btn small sec" data-act="peSpread" data-v="' + k + '">Auto-spread</button></div>' +
+    '<label for="peRev' + k + '" style="margin-top:8px">Revision day (optional)</label><select id="peRev' + k + '" data-perev="' + k + '"><option value="">No revision day</option>' +
+    days.map((d, i) => '<option value="' + d + '"' + (t.rev === d ? ' selected' : '') + '>' + WD[i] + ' ' + dshort(d) + '</option>').join('') + '</select>';
+  const groups = days.map(d => ({ d: d, ids: t.ids.filter(id => t.days[id] === d) }));
+  const free = t.ids.filter(id => !t.days[id] || days.indexOf(t.days[id]) < 0);
+  const opt = (id) => '<select data-peday="' + k + '" data-id="' + id + '" style="width:auto;padding:4px 6px;font-size:13px" aria-label="Day for ' + esc(subName(id)) + '"><option value="">Any day</option>' + days.map((d, i) => '<option value="' + d + '"' + (t.days[id] === d ? ' selected' : '') + '>' + WD[i] + '</option>').join('') + '</select>';
+  const row = id => '<div class="row" style="padding:6px 0;border-top:1px dashed var(--line)"><span class="small" style="flex:1">' + esc(subName(id)) + '</span>' + opt(id) + '</div>';
+  groups.forEach((g, i) => {
+    const rv = t.rev === g.d;
+    if (!g.ids.length && !rv) return;
+    h += '<div style="margin-top:10px"><span class="pill" style="background:' + (rv ? 'var(--warnbg);color:var(--warn)' : 'var(--pri2);color:var(--pri)') + '">' + WD[i] + ' ' + dshort(g.d) + (rv ? ' · revision day' : '') + '</span>' + g.ids.map(row).join('') + '</div>';
+  });
+  if (free.length) h += '<div style="margin-top:10px"><span class="pill" style="background:#ECEAE5;color:#3F3F45">Any day this week</span>' + free.map(row).join('') + '</div>';
+  return h + '<p class="mute small" style="margin:8px 0 0">Choose a day for each subtopic, or tap Auto-spread. Your Home screen shows each day\'s share.</p></div>';
+}
+function autoSpread(t, week) {
+  const days = weekDays(week).filter(d => d !== t.rev && d >= S.d.today);
+  const use = days.length ? days : weekDays(week).filter(d => d !== t.rev);
+  const ids = t.ids.slice().sort((a, b) => subOrder(a) - subOrder(b));
+  t.days = {};
+  const per = Math.ceil(ids.length / use.length);
+  ids.forEach((id, i) => { t.days[id] = use[Math.min(use.length - 1, Math.floor(i / per))]; });
+}
+function pickView() {
+  const e = S.pe, pk = S.pk, t = e.t[pk.k], chosen = new Set(t.ids.map(String));
+  const q = (pk.q || '').trim().toLowerCase();
+  let list = S.d.topics.filter(x => ['GS-1', 'GS-2', 'GS-3', 'GS-4'].indexOf(x.paper) >= 0);
+  if (q) list = list.filter(x => (x.subtopic + ' ' + x.topic).toLowerCase().indexOf(q) >= 0); else list = list.filter(x => x.paper === pk.paper);
+  const info = {}; list.forEach(x => info[x.id] = subInfo(x.id));
+  if (pk.f) list = list.filter(x => pk.f === 'fresh' ? info[x.id].fresh : pk.f === 'due' ? info[x.id].due : info[x.id].low);
+  const groups = []; list.forEach(x => { let g = groups.find(y => y.n === x.topic && y.p === x.paper); if (!g) groups.push(g = { n: x.topic, p: x.paper, s: [] }); g.s.push(x); });
+  let h = '<input type="text" id="pkQ" placeholder="Search: federalism, inflation, GST" value="' + esc(pk.q || '') + '">' +
+    '<div class="chips" style="margin:10px 0 6px">' + ['GS-1', 'GS-2', 'GS-3', 'GS-4'].map(p => '<button class="chip' + (!q && pk.paper === p ? ' on' : '') + '" data-act="pkPaper" data-v="' + p + '">' + p + '</button>').join('') + '</div>' +
+    '<div class="chips" style="margin-bottom:8px">' + [['fresh', 'Not started'], ['due', 'Revision due'], ['low', 'Low marks']].map(f => '<button class="chip' + (pk.f === f[0] ? ' on' : '') + '" data-act="pkF" data-v="' + f[0] + '">' + f[1] + '</button>').join('') + '</div>';
+  if (!groups.length) h += '<p class="mute">Nothing matches. Try another word or filter.</p>';
+  groups.forEach((g, gi) => {
+    const n = g.s.filter(x => chosen.has(String(x.id))).length, all = n === g.s.length, open = q || pk.f || pk.open[g.p + g.n];
+    h += '<div class="card" style="padding:4px 12px;margin:8px 0"><div class="row" style="padding:10px 0;gap:10px"><span class="box' + (all ? ' done' : '') + '" style="' + (n && !all ? 'background:var(--gold);border-color:var(--gold)' : '') + '" data-act="pkTopic" data-v="' + gi + '" role="checkbox" aria-checked="' + (all ? 'true' : n ? 'mixed' : 'false') + '" aria-label="All of ' + esc(g.n) + '">' + (all ? '✓' : n ? '–' : '') + '</span>' +
+      '<span style="flex:1;font-weight:600;cursor:pointer" data-act="pkOpenT" data-v="' + esc(g.p + g.n) + '">' + (q ? '<span class="tag b">' + g.p + '</span> ' : '') + esc(g.n) + '</span><span class="tag">' + n + '/' + g.s.length + '</span></div>';
+    if (open) g.s.forEach(x => {
+      const on = chosen.has(String(x.id)), f = info[x.id];
+      h += '<div class="row" style="padding:8px 0 8px 32px;border-top:1px dashed var(--line);gap:10px"><span class="box' + (on ? ' done' : '') + '" data-act="pkSub" data-v="' + x.id + '" role="checkbox" aria-checked="' + on + '">' + (on ? '✓' : '') + '</span>' +
+        '<span style="flex:1;font-size:14px;cursor:pointer" data-act="pkSub" data-v="' + x.id + '">' + esc(x.subtopic) + '</span>' +
+        (f.notes ? '<span class="tag ok">Notes</span>' : '') + (f.due ? '<span class="tag warn">Rev due</span>' : '') + (f.ans ? '<span class="tag">' + f.ans + ' ans</span>' : '') + '</div>';
+    });
+    h += '</div>';
+  });
+  S.pkGroups = groups;
+  h += '<div style="position:sticky;bottom:-30px;background:var(--bg);padding:10px 0 6px"><button class="cta" style="margin:0" data-act="pkDone">' + t.ids.length + ' selected · Back to plan</button>' + (t.ids.length >= SUB_MAX ? '<p class="mute small" style="text-align:center;margin:6px 0 0">Up to ' + SUB_MAX + ' a week</p>' : '') + '</div>';
+  openModal('Choose subtopics', h); S.modalCtx = { type: 'plan', week: e.week };
+  const qi = $('pkQ'); if (qi) { qi.addEventListener('input', () => { clearTimeout(S.pkT); S.pkT = setTimeout(() => { pk.q = qi.value; pickView(); const n = $('pkQ'); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 250); }); }
+}
+function planDays(i, pl) {
+  const done = new Set((i.doneIds || []).map(String));
+  const mark = id => '<span style="color:' + (done.has(String(id)) ? 'var(--sage)' : 'var(--mute)') + '">' + (done.has(String(id)) ? '✓ ' : '○ ') + esc(subName(id)) + '</span>';
+  const days = weekDays(pl.week), dmap = i.days || {};
+  if (!Object.keys(dmap).length && !i.rev) return '<div class="small" style="margin-top:6px;line-height:1.6">' + i.ids.map(mark).join('<br>') + '</div>';
+  let h = '<div class="small" style="margin-top:6px;line-height:1.6">';
+  days.forEach((d, k) => {
+    const ids = i.ids.filter(id => dmap[id] === d);
+    if (!ids.length && i.rev !== d) return;
+    h += '<div style="margin-top:6px"><b' + (d === S.d.today ? ' style="color:var(--terra)"' : '') + '>' + WD[k] + (d === S.d.today ? ' · today' : '') + '</b>' + (i.rev === d ? ' <span class="tag warn">revision day</span>' : '') + (ids.length ? '<br>' + ids.map(mark).join('<br>') : '') + '</div>';
+  });
+  const free = i.ids.filter(id => !dmap[id]);
+  if (free.length) h += '<div style="margin-top:6px"><b>Any day</b><br>' + free.map(mark).join('<br>') + '</div>';
+  return h + '</div>';
+}
+function todaySlice(pl) {
+  const i = pl.progress.items.find(x => x.type === 'subtopics'); if (!i) return '';
+  const today = S.d.today, ids = i.ids.filter(id => (i.days || {})[id] === today), done = new Set((i.doneIds || []).map(String));
+  const late = i.ids.filter(id => (i.days || {})[id] && i.days[id] < today && !done.has(String(id)));
+  if (!ids.length && i.rev !== today && !late.length) return '';
+  let h = '<div style="margin:8px 0;padding:10px 12px;border-radius:14px;background:var(--pri2)"><b style="font-size:14px">Today\'s Sankalp</b>';
+  if (i.rev === today) h += '<div class="small" style="margin-top:4px">🔁 Revision day: clear your due revisions and go over this week\'s subtopics.</div>';
+  ids.forEach(id => { const ok = done.has(String(id)); h += '<div class="small" style="margin-top:4px;' + (ok ? 'color:var(--sage)' : '') + '">' + (ok ? '✓ ' : '○ ') + esc(subName(id)) + (ok ? '' : ' · notes or one answer') + '</div>'; });
+  if (late.length) h += '<div class="small" style="margin-top:6px;color:var(--warn)">Left from earlier: ' + late.map(id => esc(subName(id))).join(', ') + '</div>';
+  return h + '</div>';
 }
 function keepPe() { if (S.pe) S.pe.t.forEach((t, k) => { if (t.type === 'custom' && $('peC' + k)) t.text = $('peC' + k).value; }); }
 function reviewForm(pl) {
@@ -1306,12 +1471,25 @@ function reviewForm(pl) {
 }
 const PLANACT = {
   plan: ds => { if (S.modalCtx && S.modalCtx.type === 'plan' && S.modalCtx.week !== ds.v) S.pe = null; if (!S.modalCtx || S.modalCtx.type !== 'plan') S.pe = null; planView(ds.v || wkInfo().mon); },
-  peAdd: ds => { keepPe(); S.pe.t.push(ds.v === 'subtopics' ? { type: 'subtopics', ids: [] } : ds.v === 'custom' ? { type: 'custom', text: '' } : { type: ds.v, n: ds.v === 'revisions' ? Math.max(3, planSuggest().last.revisions) : Math.max(2, planSuggest().last.ca) }); planView(S.pe.week); },
+  peAdd: ds => { keepPe(); if (ds.v === 'subtopics') { S.pe.t.push({ type: 'subtopics', ids: [], days: {}, rev: '' }); S.pk = { k: S.pe.t.length - 1, paper: 'GS-1', q: '', f: '', open: {} }; return pickView(); } S.pe.t.push(ds.v === 'subtopics' ? { type: 'subtopics', ids: [] } : ds.v === 'custom' ? { type: 'custom', text: '' } : { type: ds.v, n: ds.v === 'revisions' ? Math.max(3, planSuggest().last.revisions) : Math.max(2, planSuggest().last.ca) }); planView(S.pe.week); },
+  pkOpen: ds => { keepPe(); const t = S.pe.t[Number(ds.v)]; const f = t.ids[0] && topic(t.ids[0]); S.pk = { k: Number(ds.v), paper: f ? f.paper : 'GS-1', q: '', f: '', open: {} }; pickView(); },
+  pkPaper: ds => { S.pk.paper = ds.v; S.pk.q = ''; pickView(); },
+  pkF: ds => { S.pk.f = S.pk.f === ds.v ? '' : ds.v; pickView(); },
+  pkOpenT: ds => { S.pk.open[ds.v] = !S.pk.open[ds.v]; pickView(); },
+  pkSub: ds => { const t = S.pe.t[S.pk.k], k = t.ids.map(String).indexOf(String(ds.v));
+    if (k >= 0) { t.ids.splice(k, 1); delete t.days[ds.v]; } else { if (t.ids.length >= SUB_MAX) return toast('Up to ' + SUB_MAX + ' subtopics a week'); t.ids.push(Number(ds.v)); }
+    pickView(); },
+  pkTopic: ds => { const t = S.pe.t[S.pk.k], g = S.pkGroups[Number(ds.v)], ids = g.s.map(x => String(x.id)), have = t.ids.map(String);
+    if (ids.every(i => have.indexOf(i) >= 0)) { t.ids = t.ids.filter(i => ids.indexOf(String(i)) < 0); ids.forEach(i => delete t.days[i]); }
+    else { const add = ids.filter(i => have.indexOf(i) < 0), room = SUB_MAX - t.ids.length; add.slice(0, room).forEach(i => t.ids.push(Number(i))); if (add.length > room) toast('Up to ' + SUB_MAX + ' subtopics a week · added ' + Math.max(0, room)); }
+    S.pk.open[g.p + g.n] = true; pickView(); },
+  pkDone: () => { S.pk = null; planView(S.pe.week); },
+  peSpread: ds => { keepPe(); autoSpread(S.pe.t[Number(ds.v)], S.pe.week); planView(S.pe.week); },
   peDel: ds => { keepPe(); S.pe.t.splice(Number(ds.v), 1); planView(S.pe.week); },
   peSubDel: ds => { keepPe(); S.pe.t[Number(ds.v)].ids.splice(Number(ds.id), 1); planView(S.pe.week); },
   peN: ds => { keepPe(); const t = S.pe.t[Number(ds.v)]; t.n = Math.max(t.type === 'answers' ? 7 : 1, Math.min(60, t.n + Number(ds.id))); planView(S.pe.week); },
   peVis: ds => { keepPe(); S.pe.vis = ds.v; planView(S.pe.week); },
-  peCarry: () => { keepPe(); const e = S.pe; e.carry.forEach(i => { if (e.t.length >= 5) return; if (i.type === 'subtopics') { const left = i.ids.filter(x => !(i.doneIds || []).map(String).includes(String(x))); const ex = e.t.find(t => t.type === 'subtopics'); if (ex) left.forEach(x => { if (!ex.ids.map(String).includes(String(x))) ex.ids.push(x); }); else e.t.push({ type: 'subtopics', ids: left }); } else if (i.type === 'custom') e.t.push({ type: 'custom', text: i.text }); else if (!e.t.some(t => t.type === i.type)) e.t.push({ type: i.type, n: i.need }); }); e.carry = []; planView(e.week); },
+  peCarry: () => { keepPe(); const e = S.pe; e.carry.forEach(i => { if (e.t.length >= 5) return; if (i.type === 'subtopics') { const left = i.ids.filter(x => !(i.doneIds || []).map(String).includes(String(x))); const ex = e.t.find(t => t.type === 'subtopics'); if (ex) left.forEach(x => { if (ex.ids.length < SUB_MAX && !ex.ids.map(String).includes(String(x))) ex.ids.push(x); }); else e.t.push({ type: 'subtopics', ids: left.slice(0, SUB_MAX), days: {}, rev: '' }); } else if (i.type === 'custom') e.t.push({ type: 'custom', text: i.text }); else if (!e.t.some(t => t.type === i.type)) e.t.push({ type: i.type, n: i.need }); }); e.carry = []; planView(e.week); },
   peSave: (ds, el) => busy(el, async () => {
     keepPe(); const e = S.pe;
     if (e.t.some(t => t.type === 'subtopics' && !t.ids.length)) throw new Error('Choose at least one subtopic, or remove that target');
@@ -1338,6 +1516,74 @@ function resumeRefresh() {
   S.stale = true; render(); refresh().catch(() => { S.stale = false; render(); });
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeRefresh(); });
+/* ---- Android only: reminders, home-screen widget, background check for group sessions ---- */
+const REM_DEF = { daily: true, time: '20:00', sunday: true, groups: true };
+function remCfg() { return Object.assign({}, REM_DEF, jget('gl_rem') || {}); }
+function istAt(day, hm) { return new Date(day + 'T' + hm + ':00+05:30').getTime(); }
+function meRow() { return (S.d.board || []).find(b => b.username === S.d.me.username) || {}; }
+function widgetData() {
+  const d = S.d, me = meRow(), w = wkInfo(), pl = myPlan(w.mon);
+  const need = me.todayNeed || 1, got = Math.min(me.todayGot || 0, need);
+  const ans = me.todayLeave ? 'On leave today' : got >= need ? '✓ Today\'s answer done' : '✍ Answer pending today (' + got + '/' + need + ')';
+  let title = 'No Sankalp this week', line1 = 'Open the app and plan your week', line3 = '';
+  if (pl) {
+    const pr = pl.progress;
+    title = 'Sankalp · ' + Math.round((pr.pct || 0) * 100) + '% done';
+    const sub = pr.items.find(i => i.type === 'subtopics'), done = new Set(((sub && sub.doneIds) || []).map(String));
+    const todays = sub ? sub.ids.filter(id => (sub.days || {})[id] === d.today && !done.has(String(id))) : [];
+    line1 = sub && sub.rev === d.today ? '🔁 Revision day today' : todays.length ? 'Today: ' + todays.map(id => subName(id)).join(', ') : 'Nothing set for today';
+    const left = pr.items.filter(i => !i.done).map(i => i.type === 'custom' ? tgtLabel(i) : tgtLabel(i) + ' ' + i.got + '/' + i.need);
+    line3 = left.length ? 'Pending: ' + left.join(' · ') : '✓ All targets done this week';
+  }
+  return { title: title, line1: line1, line2: ans, line3: line3, foot: 'Updated ' + new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }) };
+}
+function nativeSync() { if (!NATIVE || !S.d || !S.token) return; clearTimeout(S.nsT); S.nsT = setTimeout(() => nativeSyncNow().catch(() => {}), 600); }
+async function nativeSyncNow() {
+  const d = S.d, me = meRow(), c = remCfg();
+  const pf = plug('Preferences'); if (pf) { try { await pf.set({ key: 'gl_widget', value: JSON.stringify(widgetData()) }); } catch (e) {} }
+  const seen = (d.groups || []).map(g => g.id), br = plug('BackgroundRunner'), want = (c.groups ? S.token : '') + '|' + CFG.apiUrl + '|' + seen.join(',');
+  if (br && S.brSent !== want) { S.brSent = want; br.dispatchEvent({ label: 'com.gpscwithfriends.app.check', event: 'config', details: { api: CFG.apiUrl, token: c.groups ? S.token : '', seen: seen } }).catch(() => { S.brSent = ''; }); }
+  const ln = plug('LocalNotifications'); if (!ln) return;
+  let perm; try { perm = await ln.checkPermissions(); } catch (e) { return; }
+  if (perm.display !== 'granted' && !jget('gl_rem_asked')) { jset('gl_rem_asked', 1); try { perm = await ln.requestPermissions(); } catch (e) {} }
+  if (perm.display !== 'granted') return;
+  const ids = []; for (let i = 0; i < 12; i++) ids.push({ id: 7100 + i });
+  try { await ln.cancel({ notifications: ids }); } catch (e) {}
+  const list = [], t = now();
+  if (c.daily) for (let k = 0; k < 7; k++) {
+    const day = addDays(d.today, k), at = istAt(day, c.time);
+    if (at <= t + 30000) continue;
+    if (k === 0 && (me.todayLeave || (me.todayGot || 0) >= (me.todayNeed || 1))) continue;
+    list.push({ id: 7100 + k, title: 'No answer uploaded yet today', body: k === 0 && (me.todayNeed || 1) > 1 ? (me.todayNeed) + ' answers due today. Write and upload before the day closes.' : 'Write and upload today\'s answer before the day closes.', schedule: { at: new Date(at), allowWhileIdle: true } });
+  }
+  if (c.sunday) { const w = wkInfo(); [addDays(w.mon, 6), addDays(w.mon, 13)].forEach((sun, n) => {
+    const at = istAt(sun, '18:00'); if (at <= t + 30000 || myPlan(addDays(sun, 1))) return;
+    list.push({ id: 7110 + n, title: 'Set next week\'s Sankalp', body: 'Plan your subtopics and targets tonight (+2 points before Monday).', schedule: { at: new Date(at), allowWhileIdle: true } });
+  }); }
+  if (list.length) { try { await ln.schedule({ notifications: list }); } catch (e) {} }
+}
+async function nativeOff() {
+  if (!NATIVE) return;
+  const ln = plug('LocalNotifications'); if (ln) { const ids = []; for (let i = 0; i < 12; i++) ids.push({ id: 7100 + i }); try { await ln.cancel({ notifications: ids }); } catch (e) {} }
+  const br = plug('BackgroundRunner'); if (br) { S.brSent = ''; br.dispatchEvent({ label: 'com.gpscwithfriends.app.check', event: 'config', details: { api: CFG.apiUrl, token: '' } }).catch(() => {}); }
+  const pf = plug('Preferences'); if (pf) pf.set({ key: 'gl_widget', value: JSON.stringify({ title: 'GPSC with Friends', line1: 'Log in to see your plan', line2: '', line3: '', foot: '' }) }).catch(() => {});
+}
+function remCard() {
+  if (!NATIVE || !plug('LocalNotifications')) return '';
+  const c = remCfg(), tog = (k, label, sub) => '<div class="row" style="padding:9px 0;border-top:1px dashed var(--line)"><span style="flex:1"><b style="font-size:14px">' + label + '</b><br><span class="mute small">' + sub + '</span></span><button class="chip' + (c[k] ? ' on' : '') + '" data-act="remTog" data-v="' + k + '">' + (c[k] ? 'On' : 'Off') + '</button></div>';
+  const times = ['18:00', '19:00', '20:00', '21:00', '22:00', '23:00'];
+  return '<div class="card"><div class="row"><span class="h2" style="margin:0;font-size:18px">🔔 Reminders</span><span class="tag" id="remPerm">…</span></div>' +
+    tog('daily', 'No answer uploaded yet', 'Only on days you haven\'t uploaded') +
+    (c.daily ? '<div class="row" style="padding:0 0 8px"><span class="mute small" style="flex:1">Remind me at</span><select id="remTime" style="width:auto">' + times.map(x => '<option' + (c.time === x ? ' selected' : '') + ' value="' + x + '">' + (Number(x.slice(0, 2)) - 12) + ':00 pm</option>').join('') + '</select></div>' : '') +
+    tog('sunday', 'Sunday 6 pm: set next week\'s Sankalp', 'Skipped if it\'s already set') +
+    tog('groups', 'A friend starts a group session', 'Checked in the background, within about 15–30 minutes') +
+    '<div class="grid2" style="margin-top:8px"><button class="btn small sec" data-act="remPerm">Allow notifications</button><button class="btn small sec" data-act="remTest">Send a test</button></div>' +
+    '<p class="mute small" style="margin:8px 0 0">Home-screen widget: long-press your home screen → Widgets → GPSC with Friends → Sankalp.</p></div>';
+}
+async function remPermShow() {
+  const el = $('remPerm'), ln = plug('LocalNotifications'); if (!el || !ln) return;
+  try { const p = await ln.checkPermissions(); el.textContent = p.display === 'granted' ? 'Allowed' : 'Not allowed'; el.className = 'tag ' + (p.display === 'granted' ? 'ok' : 'warn'); } catch (e) { el.textContent = ''; }
+}
 function nativeSetup() {
   if (!NATIVE) return;
   const App = plug('App'), Bar = plug('StatusBar'), Splash = plug('SplashScreen'), Browser = plug('Browser');
@@ -1577,6 +1823,8 @@ function profileView() {
     '<div class="row" style="margin-top:10px"><span class="small">Show friends\' public manifestations to me</span><button class="btn small ' + (f.showFriends ? '' : 'sec') + '" data-act="mf" data-k="showFriends" data-v="' + (!f.showFriends) + '">' + (f.showFriends ? 'On' : 'Off') + '</button></div>' +
     '<button class="btn" data-act="saveMf">Save</button>' + (m.text ? '<div class="grid2"><button class="btn sec" data-act="previewMf">Preview</button><button class="btn sec" data-act="wallpaper">Phone wallpaper</button></div>' : '') + '</div>';
   h += '<div class="card"><button class="btn sec" style="margin-top:0" data-act="leave">Leave requests</button><button class="btn sec" data-act="revisions">Revision list</button><button class="btn sec" data-act="pw">Change password</button><button class="btn danger" data-act="logout">Log out</button></div>';
+  h += remCard();
+  h += aiCoach();
   if (d.admin) h += adminView();
   return h;
 }
@@ -1584,6 +1832,11 @@ function adminView() {
   const a = S.d.admin, st = S.d.settings;
   let h = '<h2>Admin</h2><div class="card" style="padding:4px 14px"><h3>Members</h3>' + a.members.map(m => '<div class="item"><div class="row"><span style="display:inline-flex;gap:8px;align-items:center">' + avatar(m.username, 30) + '<b>' + esc(m.name) + '</b></span>' + (m.isAdmin ? '<span class="tag b">Admin</span>' : m.active ? '<span><button class="btn small sec" data-act="admReset" data-u="' + m.username + '">Reset password</button> <button class="btn small danger" data-act="admRemove" data-u="' + m.username + '">Remove</button></span>' : '<span class="tag">Removed</span>') + '</div><span class="mute small">🎯 ' + esc(m.title) + ' · ' + m.username + '</span></div>').join('') + '</div>';
   h += '<div class="card"><h3 style="margin-top:0">Add member</h3><label for="amN">Full name</label><input type="text" id="amN"><label for="amT">Target post</label><input type="text" id="amT" placeholder="e.g. Mamlatdar"><label for="amU">Username</label><input type="text" id="amU" autocapitalize="none" placeholder="lowercase, no spaces"><button class="btn" data-act="admAdd">Add · first password gpsc2026</button></div>';
+  h += '<div class="card"><h3 style="margin-top:0">🤖 AI checking (Gemini)</h3><p class="mute small" style="margin:0">' + (S.d.ai ? 'On · uploads are checked every few minutes' : 'Off · paste a free key from aistudio.google.com') + '</p>' +
+    '<label for="aiK">Gemini API key</label><input type="password" id="aiK" placeholder="' + (S.d.ai ? 'saved · paste a new key to replace' : 'AIza…') + '" autocomplete="off">' +
+    '<label for="aiM">Model</label><input type="text" id="aiM" placeholder="gemini-2.5-flash">' +
+    '<div class="grid2"><button class="btn" data-act="aiSave">Save</button><button class="btn sec" data-act="aiTest">Test key</button></div>' +
+    '<p class="mute small" style="margin:8px 0 0">The examiner instructions are in the sheet tab AiSetup, and each person\'s profile in AiProfiles. Edit them there.</p></div>';
   h += '<div class="card"><h3 style="margin-top:0">Settings</h3>' +
     '<label for="asR">Full rules start (double days, penalties)</label><input type="date" id="asR" value="' + esc(st.rulesStart) + '">' +
     '<label for="asE">Mains exam date (countdown)</label><input type="date" id="asE" value="' + esc(st.examDate) + '">' +
@@ -1699,9 +1952,9 @@ const ACT = {
     const f = await readFile($('fpdf'), 'pdf', 25); if (!f) throw new Error('Choose the PDF');
     const r = p.groupId
       ? await call('uploadSet', S.token, { groupId: p.groupId, forUser: p.forUser || '', b64: f.b64, items: p.items.map(x => ({ gi: x.gi, seconds: x.seconds })) })
-      : await call('uploadSet', S.token, { kind: p.kind, mode: p.mode || 'gpsc', paper: p.paper || '', b64: f.b64, items: p.items.map(x => ({ subtopicId: x.subtopicId, questionId: x.questionId, question: x.question, marks: x.marks, seconds: x.seconds })) });
+      : await call('uploadSet', S.token, { kind: p.kind, mode: p.mode || 'gpsc', paper: p.paper || '', check: S.chk || 'both', b64: f.b64, items: p.items.map(x => ({ subtopicId: x.subtopicId, questionId: x.questionId, question: x.question, marks: x.marks, seconds: x.seconds })) });
     if (S.fp) S.fp = null; else jset('gl_pending', null);
-    closeModal(); toast('Uploaded ✓' + (r.forUser ? ' for ' + first(r.forUser) : '') + ' · ' + (r.reviewer ? first(r.reviewer) + ' will check it' : 'saved')); await refresh();
+    closeModal(); toast('Uploaded ✓' + (r.forUser ? ' for ' + first(r.forUser) : '') + ' · ' + (r.reviewer ? first(r.reviewer) + ' will check it' : 'saved') + (r.ai ? ' · AI report in a few minutes' : '')); await refresh();
   }),
   // check
   check: () => checkView(),
@@ -1769,6 +2022,15 @@ const ACT = {
   admAdd: (ds, el) => busy(el, async () => { await call('adminAddMember', S.token, { name: $('amN').value, title: $('amT').value, username: $('amU').value }); toast('Member added'); await refresh(); }),
   admReset: (ds, el) => busy(el, async () => { if (!confirm('Reset password for ' + ds.u + '?')) return; await call('adminResetPassword', S.token, ds.u); toast('Reset to gpsc2026'); }),
   admRemove: (ds, el) => busy(el, async () => { if (!confirm('Remove ' + ds.u + '? Their notes and answers stay in the library.')) return; await call('adminRemoveMember', S.token, ds.u); toast('Removed'); await refresh(); }),
+  remTog: ds => { const c = remCfg(); c[ds.v] = !c[ds.v]; jset('gl_rem', c); render(); nativeSync(); if (c[ds.v]) ACT.remPerm(); },
+  remPerm: async () => { const ln = plug('LocalNotifications'); if (!ln) return; try { const p = await ln.requestPermissions(); toast(p.display === 'granted' ? 'Notifications allowed ✓' : 'Allow notifications in Android Settings → Apps → GPSC with Friends'); } catch (e) {} remPermShow(); nativeSync(); },
+  remTest: async () => { const ln = plug('LocalNotifications'); if (!ln) return; try { const p = await ln.requestPermissions(); if (p.display !== 'granted') return toast('Allow notifications first'); await ln.schedule({ notifications: [{ id: 7199, title: 'GPSC with Friends', body: 'Reminders are working ✓', schedule: { at: new Date(Date.now() + 4000), allowWhileIdle: true } }] }); toast('Test arrives in a few seconds'); } catch (e) { toast('Could not send: ' + e.message); } },
+  chkMode: ds => { S.chk = ds.v; const p = S.fp || jget('gl_pending'); if (p) finishView(p); },
+  aiOpen: ds => aiView(ds.v),
+  aiRetry: (ds, el) => busy(el, async () => { await call('aiRecheck', S.token, ds.v); closeModal(); toast('Sent to AI again'); await refresh(); }),
+  aiProf: (ds, el) => busy(el, async () => { await call('saveAiProfile', S.token, { language: $('aiL').value, optional: $('aiO').value, focus: $('aiF').value }); toast('Saved ✓'); await refresh(); }),
+  aiSave: (ds, el) => busy(el, async () => { const k = $('aiK').value.trim(), m = $('aiM').value.trim(); const o = {}; if (k) o.key = k; if (m) o.model = m; const r = await call('adminSaveAi', S.token, o); toast(r.on ? 'AI checking is on ✓' : 'Saved'); await refresh(); }),
+  aiTest: (ds, el) => busy(el, async () => { const r = await call('adminTestAi', S.token); toast(r.ok ? 'Key works ✓ · ' + r.model : 'Gemini answered, but not as expected'); }),
   admSettings: (ds, el) => busy(el, async () => { await call('adminSaveSettings', S.token, { rulesStart: $('asR').value, examDate: $('asE').value, essayMinutes: $('asM').value, essayWords: $('asW').value, revSyllabus: $('asS').value, revCurrent: $('asC').value, oldNotesPerDay: $('asO').value, penalty: $('asP').value, imageBase: $('asI').value, upscUsers: $('asU').value, upscChecker: $('asK').value, upscExamDate: $('asX').value }); toast('Settings saved'); await refresh(); }),
   admImport: (ds, el) => busy(el, async () => { const t = await readFile($('aqF'), 'text', 5); if (!t) throw new Error('Choose the .tsv file'); const r = await call('adminImportQuestions', S.token, t); toast('Imported ' + r.added + ' · skipped ' + r.skipped + (r.noTopic ? ' · ' + r.noTopic + ' need the UPSC track' : '')); S._asked = null; await refresh(); }),
 };
